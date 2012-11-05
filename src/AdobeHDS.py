@@ -62,7 +62,7 @@ class cURL:
                 open(cookie_file, mode, buffering, encoding, errors, newline, closefd)
                 self.cookie_file = cookie_file
             except IOError as ex:
-            
+                pass
 
 class F4F:
     def InitDecoder(self):

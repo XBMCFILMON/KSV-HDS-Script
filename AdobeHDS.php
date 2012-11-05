@@ -48,39 +48,39 @@
           // Parse params
           if ($argc > 1)
             {
-              $doubleParam = false;
+              $paramSwitch = false;
               for ($i = 1; $i < $argc; $i++)
                 {
-                  $arg     = $argv[$i];
-                  $isparam = preg_match('/^--/', $arg);
+                  $arg      = $argv[$i];
+                  $isSwitch = preg_match('/^--/', $arg);
 
-                  if ($isparam)
+                  if ($isSwitch)
                       $arg = preg_replace('/^--/', '', $arg);
 
-                  if ($doubleParam && $isparam)
-                      LogError("[param] expected after '$doubleParam' switch (" . self::$ACCEPTED[1][$doubleParam] . ")");
-                  else if (!$doubleParam && !$isparam)
+                  if ($paramSwitch && $isSwitch)
+                      LogError("[param] expected after '$paramSwitch' switch (" . self::$ACCEPTED[1][$paramSwitch] . ")");
+                  else if (!$paramSwitch && !$isSwitch)
                     {
                       if (isset($GLOBALS['baseFilename']) and (!$GLOBALS['baseFilename']))
                           $GLOBALS['baseFilename'] = $arg;
                       else
                           LogError("'$arg' is an invalid switch, use --help to display valid switches.");
                     }
-                  else if (!$doubleParam && $isparam)
+                  else if (!$paramSwitch && $isSwitch)
                     {
                       if (isset($this->params[$arg]))
                           LogError("'$arg' switch cannot occur more than once");
 
                       $this->params[$arg] = true;
                       if (isset(self::$ACCEPTED[1][$arg]))
-                          $doubleParam = $arg;
+                          $paramSwitch = $arg;
                       else if (!isset(self::$ACCEPTED[0][$arg]))
                           LogError("there's no '$arg' switch, use --help to display all switches.");
                     }
-                  else if ($doubleParam && !$isparam)
+                  else if ($paramSwitch && !$isSwitch)
                     {
-                      $this->params[$doubleParam] = $arg;
-                      $doubleParam                = false;
+                      $this->params[$paramSwitch] = $arg;
+                      $paramSwitch                = false;
                     }
                 }
             }
@@ -119,7 +119,7 @@
       function cURL($cookies = true, $cookie = 'Cookies.txt', $compression = 'gzip', $proxy = '')
         {
           $this->headers     = $this->headers();
-          $this->user_agent  = 'Mozilla/5.0 (Windows NT 5.1; rv:15.0) Gecko/20100101 Firefox/15.0.1';
+          $this->user_agent  = 'Mozilla/5.0 (Windows NT 5.1; rv:16.0) Gecko/20100101 Firefox/16.0';
           $this->compression = $compression;
           $this->cookies     = $cookies;
           if ($this->cookies == true)
@@ -275,6 +275,7 @@
         {
           if (isset($this->mh))
             {
+              curl_multi_select($this->mh);
               $this->mrc = curl_multi_exec($this->mh, $this->active);
               if ($this->mrc != CURLM_OK)
                   return false;
@@ -342,7 +343,7 @@
   class F4F
     {
       var $audio, $auth, $baseFilename, $baseTS, $bootstrapUrl, $baseUrl, $debug, $duration, $fileCount, $filesize;
-      var $format, $live, $media, $outDir, $outFile, $parallel, $play, $quality, $rename, $video;
+      var $format, $live, $media, $outDir, $outFile, $parallel, $play, $processed, $quality, $rename, $video;
       var $prevTagSize, $tagHeaderLen;
       var $segTable, $fragTable, $segNum, $fragNum, $frags, $fragCount, $fragsPerSeg, $lastFrag, $fragUrl, $discontinuity;
       var $prevAudioTS, $prevVideoTS, $pAudioTagLen, $pVideoTagLen, $pAudioTagPos, $pVideoTagPos;
@@ -362,6 +363,7 @@
           $this->outFile       = "";
           $this->parallel      = 8;
           $this->play          = false;
+          $this->processed     = false;
           $this->quality       = "high";
           $this->rename        = false;
           $this->segNum        = 1;
@@ -415,16 +417,27 @@
           LogInfo("Processing manifest info....");
           $xml     = $this->GetManifest($cc, $manifest);
           $baseUrl = $xml->xpath("/ns:manifest/ns:baseURL");
-          $baseUrl = isset($baseUrl[0]) ? GetString($baseUrl[0]) : "";
-          $url     = $xml->xpath("/ns:manifest/ns:media[@*]");
+          if (isset($baseUrl[0]))
+            {
+              $baseUrl = GetString($baseUrl[0]);
+              if (substr($baseUrl, -1) != "/")
+                  $baseUrl .= "/";
+            }
+          else
+              $baseUrl = "";
+          $url = $xml->xpath("/ns:manifest/ns:media[@*]");
           if (isset($url[0]['href']))
             {
               foreach ($url as $manifest)
                 {
-                  $bitrate                        = (int) $manifest['bitrate'];
-                  $manifests[$bitrate]['bitrate'] = $bitrate;
-                  $manifests[$bitrate]['url']     = NormalizePath($baseUrl . GetString($manifest['href']));
-                  $manifests[$bitrate]['xml']     = $this->GetManifest($cc, $manifests[$bitrate]['url']);
+                  $bitrate = (int) $manifest['bitrate'];
+                  $entry =& $manifests[$bitrate];
+                  $entry['bitrate'] = $bitrate;
+                  $href             = GetString($manifest['href']);
+                  if (substr($href, 0, 1) == "/")
+                      $href = substr($href, 1);
+                  $entry['url'] = NormalizePath($baseUrl . $href);
+                  $entry['xml'] = $this->GetManifest($cc, $entry['url']);
                 }
             }
           else
@@ -441,7 +454,11 @@
               // Extract baseUrl from manifest url
               $baseUrl = $xml->xpath("/ns:manifest/ns:baseURL");
               if (isset($baseUrl[0]))
+                {
                   $baseUrl = GetString($baseUrl[0]);
+                  if (substr($baseUrl, -1) == "/")
+                      $baseUrl = substr($baseUrl, 0, -1);
+                }
               else
                 {
                   $baseUrl = $manifest['url'];
@@ -466,7 +483,10 @@
                   $mediaEntry =& $this->media[$bitrate];
 
                   $mediaEntry['baseUrl'] = $baseUrl;
-                  $mediaEntry['url']     = $stream['url'];
+                  if (substr($stream['url'], 0, 1) == "/")
+                      $mediaEntry['url'] = substr($stream['url'], 1);
+                  else
+                      $mediaEntry['url'] = $stream['url'];
                   if (isset($stream[strtolower('bootstrapInfoId')]))
                       $bootstrap = $xml->xpath("/ns:manifest/ns:bootstrapInfo[@id='" . $stream[strtolower('bootstrapInfoId')] . "']");
                   else
@@ -736,18 +756,17 @@
           $opt['duration'] = 0;
 
           // Extract baseFilename
-          if (substr($this->media['url'], -1) == '/')
-              $this->baseFilename = substr($this->media['url'], 0, -1);
-          else
-              $this->baseFilename = $this->media['url'];
+          $this->baseFilename = $this->media['url'];
+          if (substr($this->baseFilename, -1) == '/')
+              $this->baseFilename = substr($this->baseFilename, 0, -1);
+          $this->baseFilename = RemoveExtension($this->baseFilename);
           if (strrpos($this->baseFilename, '/'))
-              $this->baseFilename = substr($this->baseFilename, strrpos($this->baseFilename, '/') + 1) . "Seg" . $segNum . "-Frag";
-          else
-              $this->baseFilename .= "Seg" . $segNum . "-Frag";
+              $this->baseFilename = substr($this->baseFilename, strrpos($this->baseFilename, '/') + 1);
           if (strpos($manifest, "?"))
               $this->baseFilename = md5(substr($manifest, 0, strpos($manifest, "?"))) . "_" . $this->baseFilename;
           else
               $this->baseFilename = md5($manifest) . "_" . $this->baseFilename;
+          $this->baseFilename .= "Seg" . $segNum . "-Frag";
 
           if ($fragNum >= $this->fragCount)
               LogError("No fragment available for downloading");
@@ -764,23 +783,40 @@
             {
               while ((count($cc->ch) < $this->parallel) and ($fragNum < $this->fragCount))
                 {
-                  $fragNum += 1;
+                  $frag       = array();
+                  $fragNum    = $fragNum + 1;
+                  $frag['id'] = $fragNum;
                   LogInfo("Downloading $fragNum/$this->fragCount fragments", true);
                   if (in_array_field($fragNum, "firstFragment", $this->fragTable, true))
                       $this->discontinuity = value_in_array_field($fragNum, "firstFragment", "discontinuityIndicator", $this->fragTable, true);
+                  else
+                    {
+                      $closest = 1;
+                      foreach ($this->fragTable as $item)
+                        {
+                          if ($item['firstFragment'] < $fragNum)
+                              $closest = $item['firstFragment'];
+                          else
+                              break;
+                        }
+                      $this->discontinuity = value_in_array_field($closest, "firstFragment", "discontinuityIndicator", $this->fragTable, true);
+                    }
                   if (($this->discontinuity == 1) or ($this->discontinuity == 3))
                     {
-                      $this->frags[$download['id']] = false;
-                      $this->rename                 = true;
-                      continue;
+                      $frag['response'] = false;
+                      $this->rename     = true;
                     }
-                  if (file_exists($this->baseFilename . $fragNum))
+                  else if (file_exists($this->baseFilename . $fragNum))
                     {
                       LogDebug("Fragment $fragNum is already downloaded");
-                      $download['id']       = $fragNum;
-                      $download['response'] = file_get_contents($this->baseFilename . $fragNum);
-                      $this->WriteFragment($download, $opt);
-                      continue;
+                      $frag['response'] = file_get_contents($this->baseFilename . $fragNum);
+                    }
+                  if (isset($frag['response']))
+                    {
+                      if ($this->WriteFragment($frag, $opt) === 2)
+                          break 2;
+                      else
+                          continue;
                     }
 
                   /* Increase or decrease segment number if current fragment is not available */
@@ -802,15 +838,17 @@
                 {
                   for ($i = 0; $i < count($downloads); $i++)
                     {
-                      $download = $downloads[$i];
+                      $frag       = array();
+                      $download   = $downloads[$i];
+                      $frag['id'] = $download['id'];
                       if ($download['status'] == 200)
                         {
                           if ($this->VerifyFragment($download['response']))
                             {
                               LogDebug("Fragment " . $this->baseFilename . $download['id'] . " successfully downloaded");
-                              if (!$this->live)
+                              if (!($this->live or $this->play))
                                   file_put_contents($this->baseFilename . $download['id'], $download['response']);
-                              $this->WriteFragment($download, $opt);
+                              $frag['response'] = $download['response'];
                             }
                           else
                             {
@@ -830,8 +868,8 @@
                       else
                         {
                           LogDebug("Fragment " . $download['id'] . " doesn't exist, Status: " . $download['status']);
-                          $this->frags[$download['id']] = false;
-                          $this->rename                 = true;
+                          $frag['response'] = false;
+                          $this->rename     = true;
 
                           /* Resync with latest available fragment when we are left behind due to */
                           /* slow connection and short live window on streaming server. make sure */
@@ -842,42 +880,45 @@
                               $this->UpdateBootstrapInfo($cc, $this->bootstrapUrl);
                               $fragNum        = $this->fragCount - 1;
                               $this->lastFrag = $fragNum;
-                              unset($this->frags);
                             }
                         }
+                      if (isset($frag['response']))
+                          if ($this->WriteFragment($frag, $opt) === 2)
+                              break 2;
                     }
                   unset($downloads, $download);
                 }
               if ($this->live and ($fragNum >= $this->fragCount) and !$cc->active)
                   $this->UpdateBootstrapInfo($cc, $this->bootstrapUrl);
-              usleep(40000);
             }
 
           LogInfo("");
           LogDebug("\nAll fragments downloaded successfully\n");
           $cc->stopDownloads();
+          $this->processed = true;
         }
 
-      function VerifyFragment($frag)
+      function VerifyFragment(&$frag)
         {
           $fragPos = 0;
           $fragLen = strlen($frag);
 
-          // Some moronic live servers add wrong boxSize in header causing verification to fail
-          if ($this->live)
-              return true;
-
+          /* Some moronic servers add wrong boxSize in header causing fragment verification *
+           * to fail so we have to fix the boxSize before processing the fragment.          */
           while ($fragPos < $fragLen)
             {
               ReadBoxHeader($frag, $fragPos, $boxType, $boxSize);
               if ($boxType == "mdat")
                 {
-                  $frag    = substr($frag, $fragPos, $boxSize);
-                  $fragLen = strlen($frag);
-                  if ($fragLen == $boxSize)
+                  $len = strlen(substr($frag, $fragPos, $boxSize));
+                  if ($boxSize and ($len == $boxSize))
                       return true;
                   else
-                      return false;
+                    {
+                      $boxSize = $fragLen - $fragPos;
+                      WriteBoxSize($frag, $boxType, $boxSize);
+                      return true;
+                    }
                 }
               $fragPos += $boxSize;
             }
@@ -889,14 +930,17 @@
           $files   = array();
           $retries = 0;
 
-          if (!file_exists($baseFilename . ($fragNum + 1) . $fileExt))
-              $fileExt = "";
           while (true)
             {
               if ($retries >= 50)
                   break;
-              $file = $baseFilename . ++$fragNum . $fileExt;
+              $file = $baseFilename . ++$fragNum;
               if (file_exists($file))
+                {
+                  $files[] = $file;
+                  $retries = 0;
+                }
+              else if (file_exists($file . $fileExt))
                 {
                   $files[] = $file;
                   $retries = 0;
@@ -908,7 +952,7 @@
           $fragCount = count($files);
           natsort($files);
           for ($i = 0; $i < $fragCount; $i++)
-              rename($files[$i], $baseFilename . ($i + 1) . $fileExt);
+              rename($files[$i], $baseFilename . ($i + 1));
         }
 
       function WriteMetadata($flv = false)
@@ -946,11 +990,11 @@
           $flv   = false;
           extract($opt, EXTR_IF_EXISTS);
 
-          $flvData = "";
-          $fragLen = 0;
-          $fragPos = 0;
+          $flvData  = "";
+          $fragPos  = 0;
+          $packetTS = 0;
+          $fragLen  = strlen($frag);
 
-          $fragLen = strlen($frag);
           if (!$this->VerifyFragment($frag))
             {
               LogInfo("Skipping fragment number $fragNum");
@@ -961,7 +1005,10 @@
             {
               ReadBoxHeader($frag, $fragPos, $boxType, $boxSize);
               if ($boxType == "mdat")
+                {
+                  $fragLen = $fragPos + $boxSize;
                   break;
+                }
               $fragPos += $boxSize;
             }
 
@@ -988,7 +1035,7 @@
               switch ($packetType)
               {
                   case AUDIO:
-                      if ($packetTS >= $this->prevAudioTS - FRAMEGAP_DURATION * 5)
+                      if ($packetTS > $this->prevAudioTS - FRAMEGAP_DURATION * 5)
                         {
                           $FrameInfo = ReadByte($frag, $fragPos + $this->tagHeaderLen);
                           $CodecID   = ($FrameInfo & 0xF0) >> 4;
@@ -1055,7 +1102,7 @@
                           $this->audio = true;
                       break;
                   case VIDEO:
-                      if ($packetTS >= $this->prevVideoTS - FRAMEGAP_DURATION * 5)
+                      if ($packetTS > $this->prevVideoTS - FRAMEGAP_DURATION * 5)
                         {
                           $FrameInfo = ReadByte($frag, $fragPos + $this->tagHeaderLen);
                           $FrameType = ($FrameInfo & 0xF0) >> 4;
@@ -1154,7 +1201,7 @@
               if (isset($this->frags[$this->lastFrag + 1]))
                 {
                   $frag = $this->frags[$this->lastFrag + 1];
-                  if ($frag !== false)
+                  if ($frag['response'] !== false)
                     {
                       LogDebug("Writing fragment " . $frag['id'] . " to flv file");
                       if (!isset($opt['file']))
@@ -1209,7 +1256,8 @@
               if ($opt['tDuration'] and (($opt['duration'] + $this->duration) >= $opt['tDuration']))
                 {
                   LogInfo("");
-                  LogError("Finished recording " . ($opt['duration'] + $this->duration) . " seconds of content.", 0);
+                  LogInfo(($opt['duration'] + $this->duration) . " seconds of content has been recorded successfully.", true);
+                  return 2;
                 }
               if ($opt['filesize'] and ($this->filesize >= $opt['filesize']))
                 {
@@ -1222,6 +1270,7 @@
 
           if (!count($this->frags))
               unset($this->frags);
+          return true;
         }
     }
 
@@ -1277,6 +1326,8 @@
           $boxSize -= 8;
           $pos += 8;
         }
+      if ($boxSize <= 0)
+          $boxSize = 0;
     }
 
   function WriteByte(&$str, $pos, $int)
@@ -1297,6 +1348,34 @@
       $str[$pos + 1] = pack("C", ($int & 0xFF0000) >> 16);
       $str[$pos + 2] = pack("C", ($int & 0xFF00) >> 8);
       $str[$pos + 3] = pack("C", $int & 0xFF);
+    }
+
+  function WriteBoxSize(&$frag, $type, $size)
+    {
+      $fragPos = 0;
+      $fragLen = strlen($frag);
+
+      while ($fragPos < $fragLen)
+        {
+          $boxSize = ReadInt32($frag, $fragPos);
+          $boxType = substr($frag, $fragPos + 4, 4);
+          if ($boxType == $type)
+            {
+              if ($boxSize == 1)
+                {
+                  WriteInt32($frag, $fragPos + 8, 0);
+                  WriteInt32($frag, $fragPos + 12, $size);
+                  $fragPos += 16;
+                }
+              else
+                {
+                  WriteInt32($frag, $fragPos, $size);
+                  $fragPos += 8;
+                }
+              break;
+            }
+          $fragPos += $boxSize;
+        }
     }
 
   function GetString($xmlObject)
@@ -1332,42 +1411,17 @@
 
   function LogError($msg, $code = 1)
     {
-      global $quiet, $showHeader;
-      if ($showHeader)
-        {
-          ShowHeader();
-          $showHeader = false;
-        }
+      global $quiet;
       if (!$quiet)
-        {
-          if ($msg)
-              printf("%-79s\r", "");
-          printf("%s\n", $msg);
-          exit($code);
-        }
-      else
-          exit($code);
+          PrintLine($msg);
+      exit($code);
     }
 
   function LogInfo($msg, $progress = false)
     {
-      global $quiet, $showHeader;
-      if ($showHeader)
-        {
-          ShowHeader();
-          $showHeader = false;
-        }
+      global $quiet;
       if (!$quiet)
-        {
-          if ($progress)
-              printf("%-79s\r", $msg);
-          else
-            {
-              if ($msg)
-                  printf("%-79s\r", "");
-              printf("%s\n", $msg);
-            }
-        }
+          PrintLine($msg, $progress);
     }
 
   function NormalizePath($path)
@@ -1393,9 +1447,29 @@
       return $outPath;
     }
 
+  function PrintLine($msg, $progress = false)
+    {
+      global $showHeader;
+      if ($showHeader)
+        {
+          ShowHeader();
+          $showHeader = false;
+        }
+      if ($msg)
+        {
+          printf("\r%-79s\r", "");
+          if ($progress)
+              printf("%s\r", $msg);
+          else
+              printf("%s\n", $msg);
+        }
+      else
+          printf("\n");
+    }
+
   function RemoveExtension($outFile)
     {
-      preg_match("/\.\w{1,3}$/i", $outFile, $extension);
+      preg_match("/\.\w{1,4}$/i", $outFile, $extension);
       if (isset($extension[0]))
         {
           $extension = $extension[0];
@@ -1667,42 +1741,45 @@
     }
   LogInfo("Found $fragCount fragments");
 
-  // Process available fragments
-  if (!$fragCount)
-      exit(1);
-  $timeStart = microtime(true);
-  LogDebug("Joining Fragments:");
-  for ($i = $fragNum + 1; $i <= $fragNum + $fragCount; $i++)
+  if (!$f4f->processed)
     {
-      $frag = file_get_contents($baseFilename . $i . $fileExt);
-      if (!isset($opt['flv']))
+      // Process available fragments
+      if (!$fragCount)
+          exit(1);
+      $timeStart = microtime(true);
+      LogDebug("Joining Fragments:");
+      for ($i = $fragNum + 1; $i <= $fragNum + $fragCount; $i++)
         {
-          $opt['debug'] = false;
-          $f4f->InitDecoder();
-          $f4f->DecodeFragment($frag, $i, $opt);
-          if ($filesize)
-              $opt['flv'] = WriteFlvFile($outDir . $outFile . "-" . $fileCount++ . ".flv", $f4f->audio, $f4f->video);
-          else
-              $opt['flv'] = WriteFlvFile($outDir . $outFile . ".flv", $f4f->audio, $f4f->video);
-          if (!(($fragNum > 0) or $filesize))
-              $f4f->WriteMetadata($opt['flv']);
+          $frag = file_get_contents($baseFilename . $i . $fileExt);
+          if (!isset($opt['flv']))
+            {
+              $opt['debug'] = false;
+              $f4f->InitDecoder();
+              $f4f->DecodeFragment($frag, $i, $opt);
+              if ($filesize)
+                  $opt['flv'] = WriteFlvFile($outDir . $outFile . "-" . $fileCount++ . ".flv", $f4f->audio, $f4f->video);
+              else
+                  $opt['flv'] = WriteFlvFile($outDir . $outFile . ".flv", $f4f->audio, $f4f->video);
+              if (!(($fragNum > 0) or $filesize))
+                  $f4f->WriteMetadata($opt['flv']);
 
-          $opt['debug'] = $debug;
-          $f4f->InitDecoder();
+              $opt['debug'] = $debug;
+              $f4f->InitDecoder();
+            }
+          $f4f->DecodeFragment($frag, $i, $opt);
+          if ($filesize and ($f4f->filesize >= $filesize))
+            {
+              $f4f->filesize = 0;
+              fclose($opt['flv']);
+              unset($opt['flv']);
+            }
+          LogInfo("Processed " . ($i - $fragNum) . " fragments", true);
         }
-      $f4f->DecodeFragment($frag, $i, $opt);
-      if ($filesize and ($f4f->filesize >= $filesize))
-        {
-          $f4f->filesize = 0;
-          fclose($opt['flv']);
-          unset($opt['flv']);
-        }
-      LogInfo("Processed " . ($i - $fragNum) . " fragments", true);
+      fclose($opt['flv']);
+      $timeEnd   = microtime(true);
+      $timeTaken = sprintf("%.2f", $timeEnd - $timeStart);
+      LogInfo("Joined $fragCount fragments in $timeTaken seconds");
     }
-  fclose($opt['flv']);
-  $timeEnd   = microtime(true);
-  $timeTaken = sprintf("%.2f", $timeEnd - $timeStart);
-  LogInfo("Joined $fragCount fragments in $timeTaken seconds");
 
   // Delete fragments after processing
   if ($delete)
